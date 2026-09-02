@@ -24,6 +24,8 @@ typedef struct audio_ctx {
     int cvt_capacity;
     int64_t next_pts;        // 인코더 pts(샘플 단위)
     int pts_initialized;
+    int64_t last_copy_dts;   // stream copy 단조성 보정(출력 타임베이스)
+    int have_last_copy_dts;
 } audio_ctx;
 
 typedef struct tx {
@@ -389,6 +391,16 @@ static int setup_audio_stream(tx *t, AVStream *in_st) {
     return 0;
 }
 
+/// stream copy 패킷의 dts 단조성 보정(ffmpeg CLI 와 같은 정책): 편집 리스트가 있는 mov 소스는 demux 단계에서
+/// 세그먼트 경계마다 dts 가 뒤로 점프할 수 있다 — mp4 muxer 는 이를 거부하므로 직전 dts+1 로 올리고 pts ≥ dts 를 유지한다.
+static void sanitize_copy_ts(audio_ctx *a, AVPacket *p) {
+    if (p->dts == AV_NOPTS_VALUE) return;
+    if (a->have_last_copy_dts && p->dts <= a->last_copy_dts) p->dts = a->last_copy_dts + 1;
+    if (p->pts != AV_NOPTS_VALUE && p->pts < p->dts) p->pts = p->dts;
+    a->last_copy_dts = p->dts;
+    a->have_last_copy_dts = 1;
+}
+
 static int write_packet(tx *t, AVPacket *pkt) {
     int rc = av_interleaved_write_frame(t->ofmt, pkt);
     if (rc < 0) return fail(t, FFX_ERR_IO, "write_frame: %s", ffx_averr(rc, t->ebuf, sizeof t->ebuf));
@@ -472,6 +484,7 @@ static int audio_handle_packet(tx *t, audio_ctx *a, AVPacket *pkt) {
                     if (t->enc_pkt->dts != AV_NOPTS_VALUE) t->enc_pkt->dts -= off;
                 }
                 av_packet_rescale_ts(t->enc_pkt, a->in_st->time_base, a->out_st->time_base);
+                sanitize_copy_ts(a, t->enc_pkt);
                 t->enc_pkt->stream_index = a->out_st->index;
                 int w = write_packet(t, t->enc_pkt);
                 if (w) return w;
@@ -484,6 +497,7 @@ static int audio_handle_packet(tx *t, audio_ctx *a, AVPacket *pkt) {
             if (pkt->dts != AV_NOPTS_VALUE) pkt->dts -= off;
         }
         av_packet_rescale_ts(pkt, a->in_st->time_base, a->out_st->time_base);
+        sanitize_copy_ts(a, pkt);
         return write_packet(t, pkt);
     }
     int rc = avcodec_send_packet(a->dec, pkt);
@@ -511,6 +525,7 @@ static int audio_flush(tx *t, audio_ctx *a) {
                 int rc = av_bsf_receive_packet(a->bsf, t->enc_pkt);
                 if (rc < 0) break;
                 av_packet_rescale_ts(t->enc_pkt, a->in_st->time_base, a->out_st->time_base);
+                sanitize_copy_ts(a, t->enc_pkt);
                 t->enc_pkt->stream_index = a->out_st->index;
                 int w = write_packet(t, t->enc_pkt);
                 if (w) return w;

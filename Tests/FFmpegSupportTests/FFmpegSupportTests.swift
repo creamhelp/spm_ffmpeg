@@ -35,8 +35,9 @@ final class FFmpegSupportTests: XCTestCase {
 
     /// 진단: 실패한 픽스처 1건을 로그와 함께 돌린다(FFX_TEST_LOG=1 FFX_DIAG=<name>).
     func testDiagnoseSingleFixture() throws {
-        guard let name = ProcessInfo.processInfo.environment["FFX_DIAG"] else { throw XCTSkip("FFX_DIAG 미지정") }
-        let input = try fixture(name)
+        let env = ProcessInfo.processInfo.environment
+        guard let name = env["FFX_DIAG"] ?? env["FFX_DIAG_PATH"] else { throw XCTSkip("FFX_DIAG 미지정") }
+        let input: URL = try env["FFX_DIAG_PATH"].map { URL(fileURLWithPath: $0) } ?? fixture(name)
         let output = tempOutput()
         defer { try? FileManager.default.removeItem(at: output) }
         var opts = FFTranscodeOptions(videoBitRate: 200_000)
