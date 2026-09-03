@@ -10,7 +10,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/build"
 FWNAME="FFmpegCore"
-FFVER="${FFVER:-8.0.1}"
+FFVER="${FFVER:-9.0.1}"
 PLATFORMS="${PLATFORMS:-ios-arm64 ios-arm64-simulator macos-arm64}"
 MIN_IOS="${MIN_IOS:-18.0}"
 MIN_MACOS="${MIN_MACOS:-14.0}"

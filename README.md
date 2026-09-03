@@ -26,12 +26,13 @@ scripts/patches/movenc-mdta-moov.py    # mov muxer 패치: mdta 메타를 QuickT
 - 오디오: mp4 호환(aac/ac3/eac3/alac)은 stream copy, 그 외(opus/vorbis/flac/dts/wma/mp3/pcm)는 AAC 재인코딩.
   mp3 는 mp4 안에서 AVFoundation 이 트랙을 무시하므로 재인코딩 대상이다(실측).
 - 출력 컨테이너 mp4(hvc1) 또는 mov. 회전(display matrix)·HDR 정적 메타(mdcv/clli)·컨테이너 메타를 승계한다.
+- FFmpeg 9.0.1(2026-09 기준 최신 릴리스). 아이폰 APAC(공간 음향) 트랙은 코덱만 식별되고 디코더가 없어 제외된다(앱이 고지).
 - 라이선스: `--disable-gpl --disable-nonfree`, 외부 라이브러리 0개. 동적 프레임워크로 임베드(LGPL 재링크 요건). 패치·구성은 이 레포에 공개.
 
 ## 빌드
 
 ```
-scripts/build-ffmpeg.sh          # FFVER=8.0.1 기본. PLATFORMS="ios-arm64" 로 일부만 가능
+scripts/build-ffmpeg.sh          # FFVER=9.0.1 기본. PLATFORMS="ios-arm64" 로 일부만 가능
 scripts/make-xcframework.sh
 scripts/make-fixtures.sh         # 테스트 픽스처(brew ffmpeg)
 swift test                       # macOS

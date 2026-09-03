@@ -67,7 +67,7 @@ final class FFmpegSupportTests: XCTestCase {
     // MARK: - 라이브러리 정보
 
     func testLibraryInfo() {
-        XCTAssertTrue(FFmpegInfo.version.hasPrefix("8."), FFmpegInfo.version)
+        XCTAssertTrue(FFmpegInfo.version.hasPrefix("9."), FFmpegInfo.version)
         XCTAssertTrue(FFmpegInfo.license.contains("LGPL"), FFmpegInfo.license)
         XCTAssertFalse(FFmpegInfo.configuration.contains("--enable-gpl"))
         XCTAssertTrue(FFmpegInfo.configuration.contains("--disable-gpl"))
