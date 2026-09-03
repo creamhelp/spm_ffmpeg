@@ -69,6 +69,9 @@ gen h264_60fps.mkv
 # 15b) VP9 in MP4 — 컨테이너는 AVFoundation 이 읽지만 코덱은 VT 디코드 불가(라우터의 isDecodable 판정 → ffmpeg)
 gen vp9_aac.mp4
 "$FF" "${COMMON[@]}" "${VSRC[@]}" "${ASRC[@]}" -c:v libvpx-vp9 -b:v 300k -deadline realtime -cpu-used 8 -c:a aac -b:a 96k -shortest "$OUT/vp9_aac.mp4"
+# 15c) 10초 H.264+AAC in Matroska(≈400kbps) — 변환 모드(D-224) 목표 상한 검증용(2초 클립은 인코더 rate control 이 부정확)
+gen h264_aac_10s.mkv
+"$FF" "${COMMON[@]}" -f lavfi -i "testsrc2=size=$SIZE:rate=30:duration=10" -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=10" -c:v libx264 -preset veryfast -pix_fmt yuv420p -b:v 400k -c:a aac -b:a 96k -shortest "$OUT/h264_aac_10s.mkv"
 # 16) 손상/비미디어 파일(스킵 판정 검증)
 gen not_a_video.bin
 head -c 4096 /dev/urandom > "$OUT/not_a_video.bin"
