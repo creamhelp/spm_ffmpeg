@@ -7,11 +7,11 @@
 #
 # 사용: scripts/build-ffmpeg.sh            (기본: ios-arm64 ios-arm64-simulator macos-arm64)
 #       PLATFORMS="ios-arm64" scripts/build-ffmpeg.sh
-#       FFVER=8.0.1 scripts/build-ffmpeg.sh
+#       FFVER=9.0.1 scripts/build-ffmpeg.sh   (기본값; 다른 버전은 FFVER 로 지정)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-FFVER="${FFVER:-8.0.1}"
+FFVER="${FFVER:-9.0.1}"
 BUILD="$ROOT/build"
 SRC="$BUILD/ffmpeg-$FFVER"
 LOGS="$BUILD/logs"
