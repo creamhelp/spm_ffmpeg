@@ -197,6 +197,24 @@ final class FFmpegSupportTests: XCTestCase {
         XCTAssertEqual(r.framesEncoded, 60, accuracy: 3)
     }
 
+    /// 출력 실측(out_bytes)이 채워지고, 60fps 소스의 실측 비트레이트가 목표 + 오디오(copy) 를 크게 넘지 않는다
+    /// (ExpectedFrameRate 패치 + DataRateLimits 1.5배 상한 — iOS 에서 2배 초과가 났던 레이트 컨트롤의 회귀 검사).
+    func testTranscodeReportsOutputBytesWithinRateCap() throws {
+        let input = try fixture("h264_60fps.mkv")
+        let output = tempOutput()
+        defer { try? FileManager.default.removeItem(at: output) }
+        let target = 300_000
+        let r = try FFmpegTranscoder().transcode(input: input, output: output,
+                                                 options: FFTranscodeOptions(videoBitRate: target),
+                                                 progress: { _ in }, isCancelled: { false })
+        let size = (try? FileManager.default.attributesOfItem(atPath: output.path)[.size] as? Int64) ?? 0
+        XCTAssertEqual(r.outputBytes, size, "out_bytes = 실제 파일 크기")
+        XCTAssertGreaterThan(r.outputBitRate, 0)
+        let audioBps = (try FFmpegProber.probe(input)).audio.reduce(Int64(0)) { $0 + max($1.bitRate, 128_000) }
+        XCTAssertLessThanOrEqual(r.outputBitRate, Int64(Double(target) * 1.5) + audioBps + 50_000,
+                                 "실측 \(r.outputBitRate)bps 가 상한을 초과")
+    }
+
     func testTranscodeDownscale() throws {
         let input = try fixture("h264_aac.mkv")
         let output = tempOutput()
