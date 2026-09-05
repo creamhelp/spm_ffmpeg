@@ -203,6 +203,8 @@ public struct FFTranscodeOptions: Sendable, Equatable {
     public var metadata: [String: String] = [:]
     /// av_log 레벨(0 = 기본 error). 진단 시 16(warning)/32(info).
     public var logLevel: Int32 = 0
+    /// 비디오 스트림 복사(리먹스, D-234) — 디코드/인코드 없이 컨테이너만 바꾼다. videoBitRate 는 무시된다.
+    public var copyVideo: Bool = false
 
     public init(videoBitRate: Int) { self.videoBitRate = videoBitRate }
 }
@@ -269,6 +271,22 @@ private func ffx_progress_trampoline(_ ctx: UnsafeMutableRawPointer?, _ fraction
     return box.isCancelled() ? 1 : 0
 }
 
+/// 리먹스(D-234): 비디오 스트림을 디코드/인코드 없이 MP4 로 옮긴다(수 초·무손실). 오디오는 mp4 호환이면 copy, 아니면 AAC.
+/// 용도: AVFoundation 이 컨테이너(WebM/MKV)를 못 열어 비교재생이 막힌 원본을 AVPlayer 가 열 수 있는 형태로 바꾼다
+/// (VP9 는 앱이 VideoToolbox 보조 디코더를 등록한 iOS 26.2+ 기기에서 재생된다).
+public enum FFmpegRemuxer {
+    public static func remux(input: URL, output: URL,
+                             progress: @escaping (Double) -> Void = { _ in },
+                             isCancelled: @escaping () -> Bool = { false }) throws -> FFTranscodeResult {
+        var opts = FFTranscodeOptions(videoBitRate: 0)
+        opts.copyVideo = true
+        opts.container = .mp4
+        opts.preferHardwareDecode = false
+        return try FFmpegTranscoder().transcode(input: input, output: output, options: opts,
+                                                progress: progress, isCancelled: isCancelled)
+    }
+}
+
 public final class FFmpegTranscoder: @unchecked Sendable {
     // 상태 없음 — @unchecked 는 클래스 형태(콜백 보관 없이 호출별 상자 사용) 때문이며 공유 가변 상태가 없다.
     public init() {}
@@ -291,6 +309,7 @@ public final class FFmpegTranscoder: @unchecked Sendable {
         opts.prioritize_speed = options.prioritizeSpeed ? 1 : 0
         opts.force_hevc = options.forceHEVC ? 1 : 0
         opts.log_level = options.logLevel
+        opts.video_copy = options.copyVideo ? 1 : 0
 
         let keys = options.metadata.keys.sorted()
         let values = keys.map { options.metadata[$0]! }

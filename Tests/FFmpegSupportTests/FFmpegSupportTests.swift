@@ -215,6 +215,48 @@ final class FFmpegSupportTests: XCTestCase {
                                  "실측 \(r.outputBitRate)bps 가 상한을 초과")
     }
 
+    /// 리먹스(D-234): 비디오 stream copy 로 WebM/MKV → MP4. 코덱·해상도·길이 보존, 비호환 오디오(opus)만 AAC 재인코딩.
+    func testRemuxCopiesVideoStreamIntoMP4() throws {
+        let cases: [(name: String, codec: String, audioReencoded: Int)] = [
+            ("vp9_opus.webm", "vp9", 1), ("h264_aac.mkv", "h264", 0), ("hevc_ac3.mkv", "hevc", 0),
+        ]
+        // MP4 규격에 없는 코덱(VP8)은 분명한 muxer 오류로 거부 — 호출자가 리먹스 불가로 판단해 다른 경로(커스텀 플레이어)로 간다.
+        let vp8 = try fixture("vp8_vorbis.webm")
+        let vp8out = tempOutput()
+        defer { try? FileManager.default.removeItem(at: vp8out) }
+        XCTAssertThrowsError(try FFmpegRemuxer.remux(input: vp8, output: vp8out)) { error in
+            XCTAssertTrue("\(error)".contains("cannot be stored"), "\(error)")
+        }
+        for c in cases {
+            let input = try fixture(c.name)
+            let output = tempOutput()
+            defer { try? FileManager.default.removeItem(at: output) }
+            var last = 0.0
+            let r: FFTranscodeResult
+            do {
+                r = try FFmpegRemuxer.remux(input: input, output: output, progress: { last = $0 }, isCancelled: { false })
+            } catch {
+                XCTFail("\(c.name): remux threw \(type(of: error)) — \(error)")
+                continue
+            }
+            XCTAssertEqual(r.videoEncoder, "copy", c.name)
+            XCTAssertFalse(r.usedHardwareEncode, c.name)
+            XCTAssertGreaterThan(r.framesEncoded, 0, c.name)
+            XCTAssertEqual(last, 1.0, accuracy: 0.001, "\(c.name): 최종 진행률")
+            XCTAssertEqual(r.audioReencoded, c.audioReencoded, c.name)
+            let inP = try FFmpegProber.probe(input)
+            let outP = try FFmpegProber.probe(output)
+            XCTAssertEqual(outP.videoCodec, c.codec, "\(c.name): 코덱 보존(복사)")
+            XCTAssertTrue(outP.container.contains("mov"), c.name)
+            XCTAssertEqual(outP.width, inP.width, c.name)
+            XCTAssertEqual(outP.duration, inP.duration, accuracy: 0.25, c.name)
+            XCTAssertEqual(outP.audio.count, inP.audio.count, c.name)
+            for a in outP.audio { XCTAssertTrue(a.isMP4Compatible, "\(c.name): 출력 오디오 \(a.codec)") }
+            // 복사이므로 결과가 원본보다 크게 늘지 않는다(컨테이너 오버헤드·AAC 재인코딩 차이만).
+            XCTAssertLessThan(r.outputBytes, Int64(Double((try FileManager.default.attributesOfItem(atPath: input.path)[.size] as? Int64) ?? 0) * 1.3) + 200_000, c.name)
+        }
+    }
+
     func testTranscodeDownscale() throws {
         let input = try fixture("h264_aac.mkv")
         let output = tempOutput()
