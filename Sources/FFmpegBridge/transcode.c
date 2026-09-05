@@ -279,6 +279,71 @@ static int open_video_encoder(tx *t) {
 }
 
 // ------------------------------------------------------------------------------------------
+// 비디오 스트림 복사(리먹스, D-234) — WebM/MKV 안의 VP9/AV1/H.264/HEVC 를 디코드 없이 MP4 로 옮긴다.
+// AVFoundation 이 컨테이너를 못 열어 비교재생이 막힌 원본을, 코덱은 그대로 두고 컨테이너만 바꿔 AVPlayer 에 넘기기 위함
+// (VP9 는 앱이 VideoToolbox 보조 디코더를 등록한 뒤에만 재생된다). mp4 muxer 가 필요한 bsf(vp9_superframe 등)는
+// av_interleaved_write_frame 이 check_bitstream 으로 스스로 끼운다.
+// ------------------------------------------------------------------------------------------
+static int write_packet(tx *t, AVPacket *pkt);   // 아래(오디오 구성 뒤)에 정의
+
+static int setup_video_copy(tx *t) {
+    AVCodecParameters *par = t->vin->codecpar;
+    // 컨테이너가 이 코덱을 담을 수 있는지 먼저 확인(VP8·Theora 등은 MP4 규격에 없다) — write_header 의 EINVAL 대신 분명한 사유.
+    if (avformat_query_codec(t->ofmt->oformat, par->codec_id, FF_COMPLIANCE_NORMAL) != 1)
+        return fail(t, FFX_ERR_MUXER, "codec %s cannot be stored in %s (remux unsupported)",
+                    avcodec_get_name(par->codec_id), t->ofmt->oformat->name);
+    t->vout = avformat_new_stream(t->ofmt, NULL);
+    if (!t->vout) return fail(t, FFX_ERR_MUXER, "new video stream failed");
+    int rc = avcodec_parameters_copy(t->vout->codecpar, par);
+    if (rc < 0) return fail(t, FFX_ERR_MUXER, "parameters_copy: %s", ffx_averr(rc, t->ebuf, sizeof t->ebuf));
+    t->vout->codecpar->codec_tag = 0;          // 컨테이너가 바뀐다 — 태그는 muxer 가 고른다(vp09/avc1/hvc1/av01)
+    t->vout->time_base = t->vin->time_base;
+    t->vout->avg_frame_rate = t->frame_rate;
+    t->vout->r_frame_rate = t->frame_rate;
+    av_dict_copy(&t->vout->metadata, t->vin->metadata, 0);
+    av_dict_set(&t->vout->metadata, "handler_name", NULL, 0);
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get((enum AVPixelFormat)par->format);
+    t->bit_depth = (desc && desc->comp[0].depth > 8) ? 10 : 8;
+    if (t->stats) {
+        strncpy(t->stats->video_encoder, "copy", sizeof t->stats->video_encoder - 1);
+        t->stats->out_width = par->width;
+        t->stats->out_height = par->height;
+        t->stats->out_bit_depth = t->bit_depth;
+        t->stats->hw_encode_used = 0;
+    }
+    return 0;
+}
+
+/// 비디오 패킷 복사: 시작 오프셋 차감(전 스트림 공통) → 출력 tb → dts 단조 보정(copy 오디오와 같은 규칙) → 쓰기.
+static int copy_video_packet(tx *t, AVPacket *pkt) {
+    if (t->start_offset_us > 0) {
+        int64_t off = av_rescale_q(t->start_offset_us, AV_TIME_BASE_Q, t->vin->time_base);
+        if (pkt->pts != AV_NOPTS_VALUE) pkt->pts -= off;
+        if (pkt->dts != AV_NOPTS_VALUE) pkt->dts -= off;
+    }
+    int64_t pts = pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts;
+    if (pts != AV_NOPTS_VALUE) {
+        if (!t->start_pts_set) { t->start_pts = pts; t->start_pts_set = 1; }
+        double sec = (double)(pts - t->start_pts) * av_q2d(t->vin->time_base);
+        if (sec > t->last_sec) t->last_sec = sec;
+    }
+    av_packet_rescale_ts(pkt, t->vin->time_base, t->vout->time_base);
+    if (pkt->dts != AV_NOPTS_VALUE) {
+        if (t->have_last_dts && pkt->dts <= t->last_dts) pkt->dts = t->last_dts + 1;
+        if (pkt->pts != AV_NOPTS_VALUE && pkt->pts < pkt->dts) pkt->pts = pkt->dts;
+        t->last_dts = pkt->dts;
+        t->have_last_dts = 1;
+    }
+    pkt->stream_index = t->vout->index;
+    pkt->pos = -1;
+    t->frames_decoded++;
+    t->frames_encoded++;
+    int w = write_packet(t, pkt);
+    if (w) return w;
+    return report_progress(t, t->last_sec) ? FFX_ERR_CANCELLED : 0;
+}
+
+// ------------------------------------------------------------------------------------------
 // 오디오 구성
 // ------------------------------------------------------------------------------------------
 static int setup_audio_stream(tx *t, AVStream *in_st) {
@@ -795,11 +860,16 @@ static int run_once(const char *in_path, const char *out_path, const ffx_transco
     rc = avformat_alloc_output_context2(&t->ofmt, NULL, fmt_name, out_path);
     if (rc < 0 || !t->ofmt) { rc = fail(t, FFX_ERR_MUXER, "alloc output(%s): %s", fmt_name, ffx_averr(rc, t->ebuf, sizeof t->ebuf)); goto done; }
 
-    // ---- 디코더/인코더 ----
-    rc = open_video_decoder(t);
-    if (rc) goto done;
-    rc = open_video_encoder(t);
-    if (rc) goto done;
+    // ---- 디코더/인코더 (또는 비디오 복사) ----
+    if (opts->video_copy) {
+        rc = setup_video_copy(t);
+        if (rc) goto done;
+    } else {
+        rc = open_video_decoder(t);
+        if (rc) goto done;
+        rc = open_video_encoder(t);
+        if (rc) goto done;
+    }
     for (unsigned i = 0; i < t->ifmt->nb_streams; i++) {
         AVStream *st = t->ifmt->streams[i];
         if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
@@ -837,7 +907,7 @@ static int run_once(const char *in_path, const char *out_path, const ffx_transco
         if (rc < 0) { rc = fail(t, FFX_ERR_DECODE, "read_frame: %s", ffx_averr(rc, t->ebuf, sizeof t->ebuf)); goto done; }
         int idx = t->pkt->stream_index;
         if (idx == t->vidx) {
-            rc = decode_video_packet(t, t->pkt);
+            rc = opts->video_copy ? copy_video_packet(t, t->pkt) : decode_video_packet(t, t->pkt);
         } else {
             audio_ctx *a = NULL;
             for (int i = 0; i < t->naudio; i++) if (t->audio[i].in_index == idx) { a = &t->audio[i]; break; }
@@ -849,12 +919,14 @@ static int run_once(const char *in_path, const char *out_path, const ffx_transco
     }
 
     // ---- 플러시 ----
-    rc = decode_video_packet(t, NULL);
-    if (rc) goto done;
-    rc = avcodec_send_frame(t->venc, NULL);
-    if (rc < 0 && rc != AVERROR_EOF) { rc = fail(t, FFX_ERR_ENCODE, "video flush: %s", ffx_averr(rc, t->ebuf, sizeof t->ebuf)); goto done; }
-    rc = drain_video_encoder(t, 1);
-    if (rc) goto done;
+    if (!opts->video_copy) {
+        rc = decode_video_packet(t, NULL);
+        if (rc) goto done;
+        rc = avcodec_send_frame(t->venc, NULL);
+        if (rc < 0 && rc != AVERROR_EOF) { rc = fail(t, FFX_ERR_ENCODE, "video flush: %s", ffx_averr(rc, t->ebuf, sizeof t->ebuf)); goto done; }
+        rc = drain_video_encoder(t, 1);
+        if (rc) goto done;
+    }
     for (int i = 0; i < t->naudio; i++) {
         rc = audio_flush(t, &t->audio[i]);
         if (rc) goto done;
@@ -885,7 +957,7 @@ int ffx_transcode(const char *in_path, const char *out_path,
                   ffx_progress_cb progress, void *ctx,
                   ffx_transcode_stats *stats,
                   char *err, size_t errlen) {
-    if (!in_path || !out_path || !opts || opts->video_bit_rate <= 0) {
+    if (!in_path || !out_path || !opts || (opts->video_bit_rate <= 0 && !opts->video_copy)) {
         ffx_set_err(err, errlen, "invalid argument");
         return FFX_ERR_ARG;
     }

@@ -96,6 +96,7 @@ typedef struct ffx_transcode_options {
     const char *const *metadata_values;
     int     metadata_count;
     int     log_level;           // av_log 레벨(-8 quiet ... 32 info), 0 = 기본(error)
+    int     video_copy;          // 1: 비디오 스트림을 디코드/인코드 없이 복사(리먹스) — video_bit_rate 무시, 오디오 정책은 그대로
 } ffx_transcode_options;
 
 typedef struct ffx_transcode_stats {
