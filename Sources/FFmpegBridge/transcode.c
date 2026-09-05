@@ -6,6 +6,7 @@
 // 오디오: mp4 호환 코덱은 stream copy, 아니면 AAC 재인코딩(D2). 자막/데이터 스트림은 제외.
 #include "ffx_internal.h"
 #include <unistd.h>
+#include <sys/stat.h>
 
 typedef struct audio_ctx {
     int in_index;
@@ -215,6 +216,9 @@ static int open_video_encoder(tx *t) {
     t->enc_tb = e->time_base;
     e->framerate = t->frame_rate;
     e->bit_rate = o->video_bit_rate;
+    // 초당 데이터 상한(kVTCompressionPropertyKey_DataRateLimits, 1초 창) — 평균의 1.5배. VBR 피크는 허용하되
+    // 레이트 컨트롤이 목표를 크게 벗어나(실측: iOS 60fps 에서 2배) 결과가 원본보다 커지는 것을 막는 안전망.
+    e->rc_max_rate = o->video_bit_rate + o->video_bit_rate / 2;
     double fps = (t->frame_rate.num > 0 && t->frame_rate.den > 0) ? av_q2d(t->frame_rate) : 30.0;
     if (o->max_frame_rate > 0 && fps > o->max_frame_rate) fps = o->max_frame_rate;
     int gop_s = o->gop_seconds > 0 ? o->gop_seconds : 2;
@@ -895,5 +899,10 @@ int ffx_transcode(const char *in_path, const char *out_path,
         if (rc == FFX_ERR_HW_FALLBACK) rc = FFX_ERR_DECODE;   // SW 에서도 포맷 불일치(있을 수 없음)
     }
     if (rc != 0) unlink(out_path);
+    else if (stats) {
+        // 출력 실측 크기 — 호출자가 목표 비트레이트 대비 실제 비트레이트를 로그/검증한다.
+        struct stat st;
+        stats->out_bytes = (stat(out_path, &st) == 0) ? (int64_t)st.st_size : 0;
+    }
     return rc;
 }

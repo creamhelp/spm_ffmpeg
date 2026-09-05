@@ -114,6 +114,7 @@ typedef struct ffx_transcode_stats {
     char    video_encoder[32];
     double  elapsed_seconds;
     double  out_duration;
+    int64_t out_bytes;           // 성공 시 출력 파일 크기(바이트) — 실측 비트레이트 = out_bytes*8/out_duration
 } ffx_transcode_stats;
 
 /// 진행 콜백. fraction 0..1. 0이 아닌 값을 반환하면 취소.

@@ -29,6 +29,7 @@ if [ ! -d "$SRC" ]; then
 fi
 # 소스 패치(멱등) — LGPL 소스 오퍼에는 이 패치가 포함된다(scripts/patches/).
 python3 "$ROOT/scripts/patches/movenc-mdta-moov.py" "$SRC/libavformat/movenc.c"
+python3 "$ROOT/scripts/patches/vtenc-expected-framerate.py" "$SRC/libavcodec/videotoolboxenc.c"
 
 # ---- 컴포넌트 목록 (정본) -------------------------------------------------------------
 DEMUXERS="mov,matroska,avi,asf,flv,mpegts,mpegps,m4v,mpegvideo,h264,hevc,ivf,mp3,aac,wav,ogg"

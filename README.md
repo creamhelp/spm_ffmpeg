@@ -17,6 +17,7 @@ scripts/build-ffmpeg.sh                # FFmpeg 소스 fetch → 패치 → 3플
 scripts/make-xcframework.sh            # 정적 .a → 단일 동적 framework → xcframework, 헤더 동기화
 scripts/make-fixtures.sh               # 테스트 픽스처 생성(호스트 ffmpeg 필요)
 scripts/patches/movenc-mdta-moov.py    # mov muxer 패치: mdta 메타를 QuickTime 레이아웃(moov/meta)으로 — AVFoundation 판독용
+scripts/patches/vtenc-expected-framerate.py  # videotoolbox 인코더 패치: ExpectedFrameRate 설정 — iOS 60fps 비트레이트 2배 초과 방지
 ```
 
 ## 설계 요점

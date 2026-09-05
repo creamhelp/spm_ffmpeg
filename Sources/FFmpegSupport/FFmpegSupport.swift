@@ -223,6 +223,13 @@ public struct FFTranscodeResult: Sendable, Equatable {
     public let videoEncoder: String
     public let elapsedSeconds: Double
     public let outputDuration: Double
+    /// 출력 파일 크기(바이트). 실측 비트레이트 검증용.
+    public let outputBytes: Int64
+    /// 출력 실측 평균 비트레이트(bps, 비디오+오디오). 길이 미상이면 0.
+    public var outputBitRate: Int64 {
+        guard outputDuration > 0 else { return 0 }
+        return Int64((Double(outputBytes) * 8.0 / outputDuration).rounded())
+    }
 
     init(_ s: ffx_transcode_stats) {
         var s = s
@@ -241,6 +248,7 @@ public struct FFTranscodeResult: Sendable, Equatable {
         videoEncoder = withUnsafePointer(to: &s.video_encoder) { String(cString: UnsafeRawPointer($0).assumingMemoryBound(to: CChar.self)) }
         elapsedSeconds = s.elapsed_seconds
         outputDuration = s.out_duration
+        outputBytes = s.out_bytes
     }
 }
 
