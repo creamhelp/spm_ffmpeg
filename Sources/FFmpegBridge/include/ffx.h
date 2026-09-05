@@ -127,6 +127,14 @@ int ffx_transcode(const char *in_path, const char *out_path,
                   ffx_transcode_stats *stats,
                   char *err, size_t errlen);
 
+// ---- 썸네일 ----------------------------------------------------------------------------------
+/// 대표 프레임 1장을 RGBA(8bpc, 프리멀티플라이 아님) 로 돌려준다. out_rgba 는 ffx_free 로 해제.
+/// seconds: 목표 시각(0 이면 첫 프레임), max_edge: 긴 변 상한(0 = 원본 크기), out_rotation: 표시 회전(도).
+int ffx_thumbnail(const char *path, double seconds, int max_edge,
+                  uint8_t **out_rgba, int *out_w, int *out_h, int *out_rotation,
+                  char *err, size_t errlen);
+void ffx_free(void *p);
+
 // ---- 기타 --------------------------------------------------------------------------------
 const char *ffx_version(void);              // "8.0.1"
 const char *ffx_configuration(void);        // configure 플래그 문자열

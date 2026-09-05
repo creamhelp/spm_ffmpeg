@@ -35,5 +35,7 @@ void ffx_ensure_init(void);
 int ffx_codec_hw_decodable(enum AVCodecID id);
 /// 벽시계 초.
 double ffx_now(void);
+/// err 기록 + 코드 반환(단순 경로용).
+int fail_simple(char *err, size_t errlen, int code, const char *msg);
 
 #endif
