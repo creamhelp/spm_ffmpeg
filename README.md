@@ -18,6 +18,7 @@ scripts/make-xcframework.sh            # 정적 .a → 단일 동적 framework �
 scripts/make-fixtures.sh               # 테스트 픽스처 생성(호스트 ffmpeg 필요)
 scripts/patches/movenc-mdta-moov.py    # mov muxer 패치: mdta 메타를 QuickTime 레이아웃(moov/meta)으로 — AVFoundation 판독용
 scripts/patches/vtenc-expected-framerate.py  # videotoolbox 인코더 패치: ExpectedFrameRate 설정 — iOS 60fps 비트레이트 2배 초과 방지
+scripts/patches/vt-supplemental-decoder-ios.py  # videotoolbox 디코더 패치: VP9 보조 디코더 등록을 iOS 26.2+ 에서도(업스트림은 macOS 만)
 ```
 
 ## 설계 요점
