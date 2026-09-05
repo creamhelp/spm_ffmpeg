@@ -31,6 +31,11 @@ const char *ffx_averr(int averr, char *buf, size_t buflen) {
     return buf;
 }
 
+int fail_simple(char *err, size_t errlen, int code, const char *msg) {
+    ffx_set_err(err, errlen, "%s", msg);
+    return code;
+}
+
 double ffx_now(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);

@@ -3,6 +3,7 @@
 // 스레딩 계약: FFmpegTranscoder.transcode 는 동기(블로킹)이며 호출자가 백그라운드 스레드/큐에서 돌린다.
 // 진행/취소 콜백은 트랜스코딩 스레드에서 호출된다. 라이브러리 전역 상태는 av_log 레벨뿐이다.
 import Foundation
+import CoreGraphics
 import FFmpegBridge
 
 // MARK: - 오류
@@ -328,4 +329,41 @@ public enum FFmpegInfo {
     public static func hasEncoder(_ name: String) -> Bool { ffx_has_encoder(name) != 0 }
     public static func isMP4CompatibleAudio(_ codec: String) -> Bool { ffx_audio_codec_mp4_compatible(codec) != 0 }
     public static func setLogLevel(_ level: Int32) { ffx_set_log_level(level) }
+}
+
+// MARK: - 썸네일
+
+public struct FFThumbnail: Sendable {
+    public let image: CGImage
+    /// 표시 회전(도, 0/90/180/270). 픽셀은 회전되지 않은 인코딩 방향이다.
+    public let rotation: Int
+    public var width: Int { image.width }
+    public var height: Int { image.height }
+}
+
+public enum FFmpegThumbnailer {
+    /// 대표 프레임 1장(RGBA → CGImage). 동기·수십 ms~수백 ms. 백그라운드에서 호출할 것.
+    public static func thumbnail(_ url: URL, at seconds: Double = 1.0, maxEdge: Int = 512) throws -> FFThumbnail {
+        var rgba: UnsafeMutablePointer<UInt8>?
+        var w: Int32 = 0, h: Int32 = 0, rot: Int32 = 0
+        var err = [CChar](repeating: 0, count: 256)
+        let rc = url.withUnsafeFileSystemRepresentation { path -> Int32 in
+            ffx_thumbnail(path, seconds, Int32(maxEdge), &rgba, &w, &h, &rot, &err, err.count)
+        }
+        guard rc == FFX_OK, let buffer = rgba, w > 0, h > 0 else {
+            throw FFmpegError.make(code: rc, message: String(cString: err))
+        }
+        defer { ffx_free(buffer) }
+        let width = Int(w), height = Int(h)
+        let byteCount = width * height * 4
+        let data = Data(bytes: buffer, count: byteCount)
+        guard let provider = CGDataProvider(data: data as CFData) else { throw FFmpegError.decode("CGDataProvider failed") }
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue)
+        let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                            bytesPerRow: width * 4, space: colorSpace, bitmapInfo: bitmapInfo,
+                            provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+        guard let image else { throw FFmpegError.decode("CGImage creation failed") }
+        return FFThumbnail(image: image, rotation: Int(rot))
+    }
 }

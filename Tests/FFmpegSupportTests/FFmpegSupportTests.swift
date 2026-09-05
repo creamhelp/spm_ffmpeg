@@ -345,3 +345,36 @@ final class FFmpegAVFoundationInteropTests: XCTestCase {
         XCTAssertEqual(audio.count, 2, "AVFoundation 이 두 오디오 트랙을 모두 봐야 한다")
     }
 }
+
+// MARK: - 썸네일
+final class FFmpegThumbnailTests: XCTestCase {
+    private func fixture(_ name: String) throws -> URL {
+        let base = (name as NSString).deletingPathExtension
+        let ext = (name as NSString).pathExtension
+        guard let url = Bundle.module.url(forResource: base, withExtension: ext, subdirectory: "Fixtures") else {
+            throw XCTSkip("fixture missing: \(name)")
+        }
+        return url
+    }
+
+    func testThumbnailFromEveryTranscodableFixture() throws {
+        for f in FFmpegSupportTests.transcodable {
+            let t = try FFmpegThumbnailer.thumbnail(try fixture(f.name), at: 1.0, maxEdge: 160)
+            XCTAssertEqual(t.width, 160, f.name)
+            XCTAssertEqual(t.height, 120, f.name)
+            XCTAssertEqual(t.image.bitsPerPixel, 32, f.name)
+        }
+    }
+
+    func testThumbnailRotationAndFullSize() throws {
+        let t = try FFmpegThumbnailer.thumbnail(try fixture("h264_rot90.mp4"), at: 0, maxEdge: 0)
+        XCTAssertEqual(t.rotation, 90)
+        XCTAssertEqual(t.width, 320)
+        XCTAssertEqual(t.height, 240)
+    }
+
+    func testThumbnailRejectsGarbageAndAudioOnly() throws {
+        XCTAssertThrowsError(try FFmpegThumbnailer.thumbnail(try fixture("not_a_video.bin")))
+        XCTAssertThrowsError(try FFmpegThumbnailer.thumbnail(try fixture("audio_only.m4a")))
+    }
+}
