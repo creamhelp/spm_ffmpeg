@@ -26,6 +26,8 @@ final class FFmpegSupportTests: XCTestCase {
         ("h264_rot90.mp4", "h264", ["aac"], "mov"),
         ("h264_60fps.mkv", "h264", ["aac"], "matroska"),
         ("vp9_aac.mp4", "vp9", ["aac"], "mov"),
+        ("av1_opus.webm", "av1", ["opus"], "matroska"),   // D-235: libdav1d(SW) — 내장 av1 은 hwaccel 전용
+        ("av1_aac.mp4", "av1", ["aac"], "mov"),
     ]
 
     override func setUp() {
@@ -69,6 +71,9 @@ final class FFmpegSupportTests: XCTestCase {
     func testLibraryInfo() {
         XCTAssertTrue(FFmpegInfo.version.hasPrefix("9."), FFmpegInfo.version)
         XCTAssertTrue(FFmpegInfo.license.contains("LGPL"), FFmpegInfo.license)
+        // D-235: AV1 소프트웨어 디코더(dav1d) 탑재 — 내장 av1 은 hwaccel 전용이라 이것이 없으면 AV1 SW 경로가 없다.
+        XCTAssertTrue(FFmpegInfo.hasDecoder("libdav1d"), "libdav1d 미탑재 — scripts/build-dav1d.sh 후 재빌드")
+        XCTAssertTrue(FFmpegInfo.configuration.contains("--enable-libdav1d"), FFmpegInfo.configuration)
         XCTAssertFalse(FFmpegInfo.configuration.contains("--enable-gpl"))
         XCTAssertTrue(FFmpegInfo.configuration.contains("--disable-gpl"))
         XCTAssertTrue(FFmpegInfo.hasEncoder("hevc_videotoolbox"))
@@ -219,6 +224,7 @@ final class FFmpegSupportTests: XCTestCase {
     func testRemuxCopiesVideoStreamIntoMP4() throws {
         let cases: [(name: String, codec: String, audioReencoded: Int)] = [
             ("vp9_opus.webm", "vp9", 1), ("h264_aac.mkv", "h264", 0), ("hevc_ac3.mkv", "hevc", 0),
+            ("av1_opus.webm", "av1", 1),
         ]
         // MP4 규격에 없는 코덱(VP8)은 분명한 muxer 오류로 거부 — 호출자가 리먹스 불가로 판단해 다른 경로(커스텀 플레이어)로 간다.
         let vp8 = try fixture("vp8_vorbis.webm")

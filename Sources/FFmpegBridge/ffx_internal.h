@@ -33,6 +33,10 @@ const char *ffx_averr(int averr, char *buf, size_t buflen);
 void ffx_ensure_init(void);
 /// 코덱 id 가 videotoolbox hwaccel 대상인지.
 int ffx_codec_hw_decodable(enum AVCodecID id);
+/// 비디오 디코더 선택(D-235): AV1 은 내장 av1(hwaccel 전용)과 libdav1d(SW) 중 prefer_hw 로 고른다 —
+/// 기본 avcodec_find_decoder 는 어느 쪽이 먼저 등록됐는지에 따라 hwaccel 전용 디코더를 돌려줄 수 있다.
+/// 그 외 코덱은 avcodec_find_decoder 와 같다. 없으면 NULL.
+const AVCodec *ffx_pick_video_decoder(enum AVCodecID id, int prefer_hw);
 /// 벽시계 초.
 double ffx_now(void);
 /// err 기록 + 코드 반환(단순 경로용).

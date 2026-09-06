@@ -76,7 +76,8 @@ int ffx_probe(const char *path, ffx_media_info *out, char *err, size_t errlen) {
                      av_color_transfer_name(par->color_trc));
             copy_str(out->color_space, sizeof out->color_space,
                      av_color_space_name(par->color_space));
-            out->video_decodable = avcodec_find_decoder(par->codec_id) != NULL;
+            // SW 디코더 존재 여부로 판정(D-235: AV1 은 libdav1d 가 있어야 '디코드 가능' — 내장 av1 은 hwaccel 전용).
+            out->video_decodable = ffx_pick_video_decoder(par->codec_id, 0) != NULL;
             out->hw_decode_supported = ffx_codec_hw_decodable(par->codec_id);
             // 스트림 duration 이 컨테이너보다 신뢰될 때(mkv 등) 보정
             if (out->duration <= 0 && st->duration > 0)

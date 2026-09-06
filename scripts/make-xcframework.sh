@@ -74,6 +74,10 @@ make_framework() {
 
   local archives=()
   for l in $LIBS; do archives+=("$out/lib/$l.a"); done
+  # dav1d(AV1 SW 디코더, D-235) — build-dav1d.sh 산출을 같은 umbrella 에 정적 링크(libavcodec 이 참조).
+  local dav1d="$BUILD/deps/$platform/lib/libdav1d.a"
+  [ -f "$dav1d" ] || { echo "[xcfw] $dav1d 없음 — scripts/build-dav1d.sh 를 먼저 실행"; exit 1; }
+  archives+=("$dav1d")
 
   echo "[xcfw] linking $platform"
   # shellcheck disable=SC2086

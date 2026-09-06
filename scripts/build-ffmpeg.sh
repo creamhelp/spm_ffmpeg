@@ -34,7 +34,8 @@ python3 "$ROOT/scripts/patches/vt-supplemental-decoder-ios.py" "$SRC/libavcodec/
 
 # ---- 컴포넌트 목록 (정본) -------------------------------------------------------------
 DEMUXERS="mov,matroska,avi,asf,flv,mpegts,mpegps,m4v,mpegvideo,h264,hevc,ivf,mp3,aac,wav,ogg"
-VIDEO_DECODERS="h264,hevc,vp8,vp9,av1,mpeg1video,mpeg2video,mpeg4,msmpeg4v1,msmpeg4v2,msmpeg4v3,h263,h263i,h263p,flv,vc1,wmv1,wmv2,wmv3,mjpeg,prores,rawvideo,theora"
+# av1 = 내장(hwaccel 전용), libdav1d = 소프트웨어 AV1(D-235, build-dav1d.sh 로 먼저 빌드) — 브리지가 HW 선호 여부로 고른다.
+VIDEO_DECODERS="h264,hevc,vp8,vp9,av1,libdav1d,mpeg1video,mpeg2video,mpeg4,msmpeg4v1,msmpeg4v2,msmpeg4v3,h263,h263i,h263p,flv,vc1,wmv1,wmv2,wmv3,mjpeg,prores,rawvideo,theora"
 AUDIO_DECODERS="aac,aac_latm,apac,ac3,eac3,mp3,mp2,mp1,vorbis,opus,flac,wmav1,wmav2,wmapro,dca,truehd,alac,pcm_s16le,pcm_s16be,pcm_s24le,pcm_s24be,pcm_s32le,pcm_f32le,pcm_f32be,pcm_u8,pcm_alaw,pcm_mulaw,adpcm_ima_wav,adpcm_ms"
 ENCODERS="aac,h264_videotoolbox,hevc_videotoolbox,rawvideo"
 MUXERS="mp4,mov,ipod,null"
@@ -82,12 +83,16 @@ build_platform() {
   local sysroot; sysroot="$(xcrun --sdk "$sdk" --show-sdk-path)"
   local out="$BUILD/out/$platform"
   local objdir="$BUILD/obj/$platform"
+  local deps="$BUILD/deps/$platform"     # build-dav1d.sh 산출(libdav1d.a + pkgconfig)
   rm -rf "$out" "$objdir"; mkdir -p "$out" "$objdir"
+  [ -f "$deps/lib/pkgconfig/dav1d.pc" ] || { echo "[build] $deps 에 dav1d 없음 — scripts/build-dav1d.sh 를 먼저 실행"; exit 1; }
 
   echo "[build] === $platform (sdk=$sdk) ==="
   local log="$LOGS/$platform.log"
   (
     cd "$objdir"
+    # PKG_CONFIG_LIBDIR: 호스트(brew) 라이브러리를 절대 집지 않도록 검색 경로를 deps 로 한정(크로스컴파일).
+    PKG_CONFIG_LIBDIR="$deps/lib/pkgconfig" \
     "$SRC/configure" \
       --prefix="$out" \
       --cc="$(xcrun --sdk "$sdk" -f clang)" \
@@ -96,8 +101,10 @@ build_platform() {
       --nm="$(xcrun --sdk "$sdk" -f nm)" \
       --strip="$(xcrun --sdk "$sdk" -f strip)" \
       --sysroot="$sysroot" \
-      --extra-cflags="-arch arm64 -isysroot $sysroot $minflag -fno-common -O3" \
-      --extra-ldflags="-arch arm64 -isysroot $sysroot $minflag" \
+      --pkg-config=pkg-config --pkg-config-flags=--static \
+      --enable-libdav1d \
+      --extra-cflags="-arch arm64 -isysroot $sysroot $minflag -fno-common -O3 -I$deps/include" \
+      --extra-ldflags="-arch arm64 -isysroot $sysroot $minflag -L$deps/lib" \
       "${COMMON_FLAGS[@]}"
     make -j"$JOBS"
     make install
