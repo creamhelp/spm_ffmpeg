@@ -33,6 +33,9 @@ int ffx_thumbnail(const char *path, double seconds, int max_edge,
     int vidx = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
     if (vidx < 0 || !codec) { rc = FFX_ERR_NO_VIDEO; ffx_set_err(err, errlen, "no decodable video stream"); goto done; }
     AVStream *st = fmt->streams[vidx];
+    // 썸네일은 SW 전용 — AV1 은 hwaccel 전용 내장 디코더가 아니라 libdav1d 를 써야 한다(D-235).
+    const AVCodec *sw_codec = ffx_pick_video_decoder(st->codecpar->codec_id, 0);
+    if (sw_codec) codec = sw_codec;
 
     dec = avcodec_alloc_context3(codec);
     if (!dec) { rc = FFX_ERR_DECODER; ffx_set_err(err, errlen, "decoder alloc"); goto done; }

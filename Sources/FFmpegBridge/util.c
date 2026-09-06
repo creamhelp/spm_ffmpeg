@@ -42,6 +42,17 @@ double ffx_now(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
+const AVCodec *ffx_pick_video_decoder(enum AVCodecID id, int prefer_hw) {
+    if (id == AV_CODEC_ID_AV1) {
+        const AVCodec *hw = avcodec_find_decoder_by_name("av1");        // hwaccel(VideoToolbox) 전용
+        const AVCodec *sw = avcodec_find_decoder_by_name("libdav1d");   // 소프트웨어(dav1d)
+        if (prefer_hw && hw) return hw;
+        if (sw) return sw;
+        return hw;
+    }
+    return avcodec_find_decoder(id);
+}
+
 int ffx_codec_hw_decodable(enum AVCodecID id) {
     switch (id) {
     case AV_CODEC_ID_H264:

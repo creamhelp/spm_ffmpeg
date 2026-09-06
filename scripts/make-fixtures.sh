@@ -72,6 +72,11 @@ gen vp9_aac.mp4
 # 15c) 10초 H.264+AAC in Matroska(≈400kbps) — 변환 모드(D-224) 목표 상한 검증용(2초 클립은 인코더 rate control 이 부정확)
 gen h264_aac_10s.mkv
 "$FF" "${COMMON[@]}" -f lavfi -i "testsrc2=size=$SIZE:rate=30:duration=10" -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=10" -c:v libx264 -preset veryfast -pix_fmt yuv420p -b:v 400k -c:a aac -b:a 96k -shortest "$OUT/h264_aac_10s.mkv"
+# 15d) AV1 in WebM / MP4 (libsvtav1, D-235) — 내장 av1 은 hwaccel 전용이라 SW 디코드는 libdav1d 로만 가능.
+gen av1_opus.webm
+"$FF" "${COMMON[@]}" "${VSRC[@]}" "${ASRC[@]}" -c:v libsvtav1 -preset 12 -crf 45 -g 30 -pix_fmt yuv420p -c:a libopus -b:a 64k -shortest "$OUT/av1_opus.webm"
+gen av1_aac.mp4
+"$FF" "${COMMON[@]}" "${VSRC[@]}" "${ASRC[@]}" -c:v libsvtav1 -preset 12 -crf 45 -g 30 -pix_fmt yuv420p -c:a aac -b:a 96k -shortest "$OUT/av1_aac.mp4"
 # 16) 손상/비미디어 파일(스킵 판정 검증)
 gen not_a_video.bin
 head -c 4096 /dev/urandom > "$OUT/not_a_video.bin"

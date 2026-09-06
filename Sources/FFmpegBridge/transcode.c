@@ -135,7 +135,8 @@ static void copy_side_data(AVCodecParameters *dst, const AVCodecParameters *src,
 // ------------------------------------------------------------------------------------------
 static int open_video_decoder(tx *t) {
     AVCodecParameters *par = t->vin->codecpar;
-    const AVCodec *codec = avcodec_find_decoder(par->codec_id);
+    // AV1(D-235): HW 선호면 내장 av1(hwaccel 전용) → 실패 시 SW 재실행에서 libdav1d. 그 외 코덱은 기본 디코더.
+    const AVCodec *codec = ffx_pick_video_decoder(par->codec_id, t->prefer_hw);
     if (!codec) return fail(t, FFX_ERR_DECODER, "no decoder for %s", avcodec_get_name(par->codec_id));
     t->vdec = avcodec_alloc_context3(codec);
     if (!t->vdec) return fail(t, FFX_ERR_DECODER, "decoder alloc failed");

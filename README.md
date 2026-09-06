@@ -13,7 +13,8 @@ Sources/FFmpegBridge/                  # C 브리지 — libav* 헤더는 vendor
   probe.c · transcode.c · util.c
 Sources/FFmpegSupport/                 # Swift 래퍼 — 앱이 import 하는 유일한 제품 (FFmpegProber / FFmpegTranscoder / FFmpegInfo)
 Tests/FFmpegSupportTests/              # macOS 스모크(픽스처 17종) + AVFoundation 상호운용
-scripts/build-ffmpeg.sh                # FFmpeg 소스 fetch → 패치 → 3플랫폼 크로스컴파일 (configure 플래그 정본)
+scripts/build-dav1d.sh                 # dav1d(AV1 SW 디코더, BSD-2-Clause) 3플랫폼 크로스컴파일 → build/deps (meson+ninja 필요, 먼저 실행)
+scripts/build-ffmpeg.sh                # FFmpeg 소스 fetch → 패치 → 3플랫폼 크로스컴파일 (configure 플래그 정본, --enable-libdav1d)
 scripts/make-xcframework.sh            # 정적 .a → 단일 동적 framework → xcframework, 헤더 동기화
 scripts/make-fixtures.sh               # 테스트 픽스처 생성(호스트 ffmpeg 필요)
 scripts/patches/movenc-mdta-moov.py    # mov muxer 패치: mdta 메타를 QuickTime 레이아웃(moov/meta)으로 — AVFoundation 판독용
