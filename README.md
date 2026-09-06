@@ -32,9 +32,31 @@ scripts/patches/vt-supplemental-decoder-ios.py  # videotoolbox 디코더 패치:
 - FFmpeg 9.0.1(2026-09 기준 최신 릴리스). 아이폰 APAC(공간 음향) 트랙은 코덱만 식별되고 디코더가 없어 제외된다(앱이 고지).
 - 라이선스: `--disable-gpl --disable-nonfree`, 외부 라이브러리 0개. 동적 프레임워크로 임베드(LGPL 재링크 요건). 패치·구성은 이 레포에 공개.
 
+## License and source offer (English)
+
+This repository is the **corresponding source offer** for the FFmpeg build embedded in the LeanVid iOS app
+(bundle `com.cream.world.leanvid`, "FFmpegCore.framework").
+
+- **FFmpeg 9.0.1** — GNU Lesser General Public License v2.1 or later (`LICENSES/FFmpeg-COPYING.LGPLv2.1`).
+  Upstream source: https://ffmpeg.org/releases/ffmpeg-9.0.1.tar.xz. Built with `--disable-gpl --disable-nonfree`
+  (no GPL components). The exact configure flags are in `scripts/build-ffmpeg.sh`; the only source modifications are the
+  three idempotent patch scripts in `scripts/patches/` (mov muxer QuickTime‑style `mdta` metadata, VideoToolbox encoder
+  `ExpectedFrameRate`, VideoToolbox VP9 supplemental decoder registration on iOS 26.2+). Apply them to the upstream
+  tarball with `scripts/build-ffmpeg.sh` to reproduce the shipped binary.
+- **dav1d 1.5.4** — BSD 2‑Clause (`LICENSES/dav1d-COPYING`), statically linked into the same framework as the AV1
+  software decoder. Upstream source: https://downloads.videolan.org/pub/videolan/dav1d/1.5.4/. Built unmodified by
+  `scripts/build-dav1d.sh`.
+- The framework is embedded as a **dynamic library**, so a user can relink the app against a modified FFmpeg
+  (LGPL §6): rebuild with the scripts below and replace `Frameworks/FFmpegCore.xcframework`.
+- The bridge sources in `Sources/` (C bridge and Swift wrapper) are part of the app and are published here so the
+  LGPL library can be rebuilt and relinked; they are not themselves under the LGPL.
+
+Contact: creamhelp@gmail.com
+
 ## 빌드
 
 ```
+scripts/build-dav1d.sh           # dav1d 3플랫폼(meson·ninja 필요) → build/deps
 scripts/build-ffmpeg.sh          # FFVER=9.0.1 기본. PLATFORMS="ios-arm64" 로 일부만 가능
 scripts/make-xcframework.sh
 scripts/make-fixtures.sh         # 테스트 픽스처(brew ffmpeg)
