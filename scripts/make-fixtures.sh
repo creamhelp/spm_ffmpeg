@@ -77,6 +77,23 @@ gen av1_opus.webm
 "$FF" "${COMMON[@]}" "${VSRC[@]}" "${ASRC[@]}" -c:v libsvtav1 -preset 12 -crf 45 -g 30 -pix_fmt yuv420p -c:a libopus -b:a 64k -shortest "$OUT/av1_opus.webm"
 gen av1_aac.mp4
 "$FF" "${COMMON[@]}" "${VSRC[@]}" "${ASRC[@]}" -c:v libsvtav1 -preset 12 -crf 45 -g 30 -pix_fmt yuv420p -c:a aac -b:a 96k -shortest "$OUT/av1_aac.mp4"
+# 15e) 확장 포맷(D-241) — 빌드에 디먹서·디코더는 있으나 픽스처가 없던 조합. 앱 설명문의 지원 목록 근거.
+VSRC_CIF=(-f lavfi -i "testsrc2=size=352x288:rate=30:duration=$DUR")      # H.263 은 CIF 계열 크기만 허용
+ASRC44=(-f lavfi -i "sine=frequency=440:sample_rate=44100:duration=$DUR")  # FLV 의 MP3 는 44.1k 계열만
+gen mpeg1_mp2.mpg      # MPEG-1 + MP2 in MPEG-PS — 옛 캠코더·VCD
+"$FF" "${COMMON[@]}" "${VSRC[@]}" "${ASRC[@]}" -c:v mpeg1video -b:v 800k -c:a mp2 -b:a 128k -shortest -f mpeg "$OUT/mpeg1_mp2.mpg"
+gen mpeg2_ac3.vob      # MPEG-2 + AC-3 in VOB — DVD
+"$FF" "${COMMON[@]}" "${VSRC[@]}" "${ASRC[@]}" -c:v mpeg2video -b:v 800k -c:a ac3 -b:a 128k -shortest -f vob "$OUT/mpeg2_ac3.vob"
+gen mjpeg_pcm.avi      # Motion JPEG + PCM in AVI — 옛 디지털카메라
+"$FF" "${COMMON[@]}" "${VSRC[@]}" "${ASRC[@]}" -c:v mjpeg -q:v 5 -pix_fmt yuvj420p -c:a pcm_s16le -shortest "$OUT/mjpeg_pcm.avi"
+gen msmpeg4v3_mp3.avi  # MS MPEG-4 v3(DivX 3) + MP3 in AVI
+"$FF" "${COMMON[@]}" "${VSRC[@]}" "${ASRC[@]}" -c:v msmpeg4 -b:v 600k -c:a libmp3lame -b:a 96k -shortest "$OUT/msmpeg4v3_mp3.avi"
+gen wmv1_wma.wmv       # WMV1(WMV7) + WMA in ASF
+"$FF" "${COMMON[@]}" "${VSRC[@]}" "${ASRC[@]}" -c:v wmv1 -b:v 600k -c:a wmav2 -b:a 96k -shortest "$OUT/wmv1_wma.wmv"
+gen flv1_mp3.flv       # Sorenson Spark(FLV1) + MP3 in FLV — 옛 Flash
+"$FF" "${COMMON[@]}" "${VSRC[@]}" "${ASRC44[@]}" -c:v flv -b:v 400k -c:a libmp3lame -b:a 96k -shortest -f flv "$OUT/flv1_mp3.flv"
+gen h263_aac.3gp       # H.263 + AAC in 3GP — 옛 피처폰(실기기 3GP 의 AMR 오디오는 디코더가 없어 별도 고지)
+"$FF" "${COMMON[@]}" "${VSRC_CIF[@]}" "${ASRC[@]}" -c:v h263 -b:v 300k -c:a aac -b:a 64k -shortest -f 3gp "$OUT/h263_aac.3gp"
 # 16) 손상/비미디어 파일(스킵 판정 검증)
 gen not_a_video.bin
 head -c 4096 /dev/urandom > "$OUT/not_a_video.bin"
