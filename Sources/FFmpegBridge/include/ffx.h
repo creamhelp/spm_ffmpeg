@@ -7,6 +7,11 @@
 
 #include <stdint.h>
 #include <stddef.h>
+// 향상 훅이 CVPixelBufferRef 를 주고받는다(EnhanceVid). 애플 플랫폼 전용이라 조건부로 포함한다 —
+// 이 저장소를 다른 플랫폼에서 빌드하더라도 훅만 빠지고 나머지는 그대로 컴파일된다.
+#if defined(__APPLE__)
+#include <CoreVideo/CoreVideo.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -97,6 +102,14 @@ typedef struct ffx_transcode_options {
     int     metadata_count;
     int     log_level;           // av_log 레벨(-8 quiet ... 32 info), 0 = 기본(error)
     int     video_copy;          // 1: 비디오 스트림을 디코드/인코드 없이 복사(리먹스) — video_bit_rate 무시, 오디오 정책은 그대로
+
+    // ── 향상(EnhanceVid) ─────────────────────────────────────────────────
+    // 아래 넷을 0/NULL 로 두면 **예전과 완전히 같이 동작한다**. LeanVid 는 그대로 두면 된다.
+    // 위의 max_long_edge·max_frame_rate 는 '상한'(내리기 전용)이라 올리는 것을 표현할 수 없어서 따로 둔다.
+    int     enhance_out_width;       // 0 = 해당 없음. 향상 단계가 내놓는 프레임의 가로
+    int     enhance_out_height;      // 0 = 해당 없음. 세로
+    double  enhance_out_frame_rate;  // 0 = 해당 없음. 향상 뒤 출력 프레임율(보간이면 원본보다 크다)
+    const struct ffx_enhance_hooks *enhance;   // NULL = 향상 없음
 } ffx_transcode_options;
 
 typedef struct ffx_transcode_stats {
@@ -117,6 +130,26 @@ typedef struct ffx_transcode_stats {
     double  out_duration;
     int64_t out_bytes;           // 성공 시 출력 파일 크기(바이트) — 실측 비트레이트 = out_bytes*8/out_duration
 } ffx_transcode_stats;
+
+/// 향상 단계 훅(EnhanceVid). **NULL 이면 아무 일도 일어나지 않는다** — 이 저장소를 함께 쓰는
+/// 다른 앱(LeanVid)은 NULL 을 넘기므로 코드 경로가 예전과 동일하다.
+///
+/// 계약은 '넣고 꺼내기'다. 보간은 원본 한 장에서 여러 장이 나오고 **한 장 늦으며**,
+/// 노이즈 제거는 두 장 늦다 — 그래서 한 번 넣고 나오는 만큼 꺼내는 형태여야 한다.
+///
+///   push(원본) → pull 이 0 을 돌려줄 때까지 반복해서 꺼낸다 → ... → 끝에서 flush() 후 다시 꺼낸다
+///
+/// 버퍼 소유권: `pull` 이 돌려준 버퍼는 **호출자(이 라이브러리)가 다 쓰면 CFRelease 한다**.
+/// 구현 쪽은 retain 된 것을 넘겨야 한다.
+typedef struct ffx_enhance_hooks {
+    void *ctx;
+    /// 원본 한 장을 넣는다. 0 성공, 음수 실패.
+    int (*push)(void *ctx, CVPixelBufferRef src, int64_t pts, int32_t timescale);
+    /// 결과 한 장을 꺼낸다. 1 = 꺼냄(out/pts 채움), 0 = 더 없음, 음수 = 실패.
+    int (*pull)(void *ctx, CVPixelBufferRef *out, int64_t *pts);
+    /// 쥐고 있던 나머지를 내보낼 준비를 시킨다(이후 pull 로 꺼낸다). 0 성공, 음수 실패.
+    int (*flush)(void *ctx);
+} ffx_enhance_hooks;
 
 /// 진행 콜백. fraction 0..1. 0이 아닌 값을 반환하면 취소.
 typedef int (*ffx_progress_cb)(void *ctx, double fraction);

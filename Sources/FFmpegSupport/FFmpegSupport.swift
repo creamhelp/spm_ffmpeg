@@ -3,6 +3,7 @@
 // 스레딩 계약: FFmpegTranscoder.transcode 는 동기(블로킹)이며 호출자가 백그라운드 스레드/큐에서 돌린다.
 // 진행/취소 콜백은 트랜스코딩 스레드에서 호출된다. 라이브러리 전역 상태는 av_log 레벨뿐이다.
 import Foundation
+import CoreVideo
 import CoreGraphics
 import FFmpegBridge
 
@@ -254,6 +255,74 @@ public struct FFTranscodeResult: Sendable, Equatable {
     }
 }
 
+// MARK: - 향상 단계 다리 (EnhanceVid)
+
+/// ffmpeg 경로에 끼울 향상 단계. 앱이 구현한다.
+///
+/// 계약은 '넣고 꺼내기'다 — 보간은 원본 한 장에서 여러 장이 나오고 **한 장 늦으며**,
+/// 노이즈 제거는 두 장 늦다. 그래서 한 번 넣고 **나오는 만큼** 꺼내는 형태여야 한다.
+///
+///   push(원본) → pull 이 nil 을 줄 때까지 꺼낸다 → … → 끝에서 flush() 후 다시 꺼낸다
+///
+/// 호출은 전부 ffmpeg 의 디코드 스레드에서 **순차로** 일어난다(동시 호출 없음).
+public protocol FFFrameEnhancing: AnyObject {
+    /// 원본 한 장을 넣는다. 실패하면 false — 그러면 트랜스코드가 실패로 끝난다.
+    func push(_ buffer: CVPixelBuffer, pts: Int64, timescale: Int32) -> Bool
+    /// 결과 한 장을 꺼낸다. 더 없으면 nil.
+    func pull() -> (buffer: CVPixelBuffer, pts: Int64)?
+    /// 쥐고 있던 나머지를 내보낼 준비를 시킨다(이후 pull 로 꺼낸다).
+    func flush() -> Bool
+}
+
+/// 향상을 켤 때 함께 넘기는 값. 크기·프레임율은 **향상 단계가 내놓는 것**이다.
+/// (`FFTranscodeOptions` 의 `maxLongEdge`·`maxFrameRate` 는 상한이라 올리는 것을 표현할 수 없다.)
+public struct FFEnhancePlan {
+    public let outputWidth: Int
+    public let outputHeight: Int
+    public let outputFrameRate: Double
+    public let enhancer: any FFFrameEnhancing
+
+    public init(outputWidth: Int, outputHeight: Int, outputFrameRate: Double,
+                enhancer: any FFFrameEnhancing) {
+        self.outputWidth = outputWidth
+        self.outputHeight = outputHeight
+        self.outputFrameRate = outputFrameRate
+        self.enhancer = enhancer
+    }
+}
+
+/// C 트램펄린이 들고 다닐 상자.
+private final class EnhanceBox {
+    let enhancer: any FFFrameEnhancing
+    init(_ enhancer: any FFFrameEnhancing) { self.enhancer = enhancer }
+}
+
+private func ffx_enhance_push_trampoline(_ ctx: UnsafeMutableRawPointer?,
+                                         _ src: CVPixelBuffer?,
+                                         _ pts: Int64, _ timescale: Int32) -> Int32 {
+    guard let ctx, let src else { return -1 }
+    let box = Unmanaged<EnhanceBox>.fromOpaque(ctx).takeUnretainedValue()
+    return box.enhancer.push(src, pts: pts, timescale: timescale) ? 0 : -1
+}
+
+private func ffx_enhance_pull_trampoline(_ ctx: UnsafeMutableRawPointer?,
+                                         _ out: UnsafeMutablePointer<Unmanaged<CVPixelBuffer>?>?,
+                                         _ pts: UnsafeMutablePointer<Int64>?) -> Int32 {
+    guard let ctx, let out, let pts else { return -1 }
+    let box = Unmanaged<EnhanceBox>.fromOpaque(ctx).takeUnretainedValue()
+    guard let produced = box.enhancer.pull() else { return 0 }
+    // **소유권을 넘긴다(+1).** C 쪽이 다 쓰면 CFRelease 한다 — ffx.h 의 계약.
+    out.pointee = Unmanaged.passRetained(produced.buffer)
+    pts.pointee = produced.pts
+    return 1
+}
+
+private func ffx_enhance_flush_trampoline(_ ctx: UnsafeMutableRawPointer?) -> Int32 {
+    guard let ctx else { return -1 }
+    let box = Unmanaged<EnhanceBox>.fromOpaque(ctx).takeUnretainedValue()
+    return box.enhancer.flush() ? 0 : -1
+}
+
 /// 진행/취소 콜백 상자(C 트램펄린용).
 private final class ProgressBox {
     let progress: (Double) -> Void
@@ -292,8 +361,11 @@ public final class FFmpegTranscoder: @unchecked Sendable {
     public init() {}
 
     /// 동기 트랜스코드. 백그라운드 스레드에서 호출할 것. 실패/취소 시 출력 파일은 삭제된다.
+    /// `enhance` 를 주면 디코드와 인코드 사이에 향상 단계가 끼어든다(EnhanceVid).
+    /// nil 이면 예전과 완전히 같이 돈다 — 이 저장소를 함께 쓰는 다른 앱은 인자를 안 넘기면 된다.
     public func transcode(input: URL, output: URL,
                           options: FFTranscodeOptions,
+                          enhance: FFEnhancePlan? = nil,
                           progress: @escaping (Double) -> Void,
                           isCancelled: @escaping () -> Bool) throws -> FFTranscodeResult {
         var opts = ffx_transcode_options()
@@ -317,6 +389,24 @@ public final class FFmpegTranscoder: @unchecked Sendable {
         let boxPtr = Unmanaged.passRetained(box).toOpaque()
         defer { Unmanaged<ProgressBox>.fromOpaque(boxPtr).release() }
 
+        // 향상 단계(선택). 훅 구조체는 ffx_transcode 가 도는 동안 살아 있어야 하므로
+        // 이 스코프의 지역 변수로 두고 주소를 넘긴다.
+        var enhanceHooks = ffx_enhance_hooks()
+        var enhanceBoxPtr: UnsafeMutableRawPointer?
+        if let enhance {
+            let enhanceBox = EnhanceBox(enhance.enhancer)
+            let ptr = Unmanaged.passRetained(enhanceBox).toOpaque()
+            enhanceBoxPtr = ptr
+            enhanceHooks.ctx = ptr
+            enhanceHooks.push = ffx_enhance_push_trampoline
+            enhanceHooks.pull = ffx_enhance_pull_trampoline
+            enhanceHooks.flush = ffx_enhance_flush_trampoline
+            opts.enhance_out_width = Int32(enhance.outputWidth)
+            opts.enhance_out_height = Int32(enhance.outputHeight)
+            opts.enhance_out_frame_rate = enhance.outputFrameRate
+        }
+        defer { if let enhanceBoxPtr { Unmanaged<EnhanceBox>.fromOpaque(enhanceBoxPtr).release() } }
+
         var stats = ffx_transcode_stats()
         var err = [CChar](repeating: 0, count: 512)
         let rc: Int32 = withCStringArray(keys) { keyPtrs in
@@ -324,9 +414,12 @@ public final class FFmpegTranscoder: @unchecked Sendable {
                 opts.metadata_keys = keyPtrs
                 opts.metadata_values = valPtrs
                 opts.metadata_count = Int32(keys.count)
-                return input.withUnsafeFileSystemRepresentation { inPath in
-                    output.withUnsafeFileSystemRepresentation { outPath in
-                        ffx_transcode(inPath, outPath, &opts, ffx_progress_trampoline, boxPtr, &stats, &err, err.count)
+                return withUnsafePointer(to: &enhanceHooks) { hooksPtr in
+                    if enhanceBoxPtr != nil { opts.enhance = hooksPtr }
+                    return input.withUnsafeFileSystemRepresentation { inPath in
+                        output.withUnsafeFileSystemRepresentation { outPath in
+                            ffx_transcode(inPath, outPath, &opts, ffx_progress_trampoline, boxPtr, &stats, &err, err.count)
+                        }
                     }
                 }
             }
