@@ -31,6 +31,11 @@ typedef struct audio_ctx {
 
 typedef struct tx {
     const ffx_transcode_options *opts;
+    // 향상(EnhanceVid) 전용 — 훅이 NULL 이면 끝까지 쓰이지 않는다.
+    struct SwsContext *enh_sws;        // 디코드 프레임 → nv12(향상 입력)
+    struct SwsContext *enh_out_sws;    // 향상 출력 → 인코더 픽셀 형식
+    int enh_out_sws_ready;
+    int64_t frames_enhanced;
     int prefer_hw;
     AVFormatContext *ifmt;
     AVFormatContext *ofmt;
@@ -177,10 +182,14 @@ static int open_video_encoder(tx *t) {
                                                           ? t->vdec->pix_fmt : (enum AVPixelFormat)par->format);
     t->bit_depth = (desc && desc->comp[0].depth > 8) ? 10 : 8;
 
-    // 출력 크기(다운스케일 옵션, 업스케일 없음). 회전은 컨테이너 매트릭스로 승계하므로 픽셀 크기는 그대로.
+    // 출력 크기. 기본은 다운스케일 상한만 본다(업스케일 없음).
+    // 향상(EnhanceVid)이 켜져 있으면 **향상 단계가 내놓는 크기**가 곧 인코더 크기다 — 올리는 것도 포함된다.
     int w = par->width, h = par->height;
     if (w <= 0 || h <= 0) return fail(t, FFX_ERR_ENCODER, "invalid source dimensions %dx%d", w, h);
-    if (o->max_long_edge > 0) {
+    if (o->enhance && o->enhance_out_width > 0 && o->enhance_out_height > 0) {
+        w = o->enhance_out_width;
+        h = o->enhance_out_height;
+    } else if (o->max_long_edge > 0) {
         int longEdge = w > h ? w : h;
         if (longEdge > o->max_long_edge) {
             double s = (double)o->max_long_edge / (double)longEdge;
@@ -192,6 +201,9 @@ static int open_video_encoder(tx *t) {
     t->enc_w = w; t->enc_h = h;
 
     int scaling = (w != par->width || h != par->height);
+    // 향상이 켜지면 제로카피 경로를 쓰지 않는다. 향상 단계는 CVPixelBuffer 를 주고받고,
+    // 그 결과를 인코더에 넣으려면 평면 프레임으로 한 번 옮겨야 한다 — 경로를 하나로 유지한다.
+    if (o->enhance) scaling = 1;
     if (t->hw_active && !scaling) {
         t->enc_pix_fmt = AV_PIX_FMT_VIDEOTOOLBOX;     // 제로카피
     } else {
@@ -665,6 +677,111 @@ static int encode_video_frame(tx *t, AVFrame *frame) {
     return drain_video_encoder(t, 0);
 }
 
+// ── 향상 단계(EnhanceVid) ────────────────────────────────────────────────
+// 훅이 NULL 이면 아래 함수들은 호출되지 않는다 — 이 저장소를 함께 쓰는 다른 앱의 경로는 그대로다.
+//
+// 오가는 것은 CVPixelBuffer 다. 들어갈 때는 디코드 프레임을 그것으로 만들고,
+// 나올 때는 인코더가 받는 평면 프레임으로 옮긴다. 향상이 켜지면 제로카피를 끄므로(위 scaling=1)
+// 인코더 픽셀 형식은 항상 평면이다 — 경로가 하나다.
+
+/// 디코드 프레임을 CVPixelBuffer 로 만든다. 하드웨어 프레임은 그 안에 이미 있으니 retain 만 한다.
+/// 소프트웨어 프레임(AV1·VP8 등)은 한 번 복사한다. 실패하면 NULL.
+static CVPixelBufferRef enhance_buffer_from_frame(tx *t, AVFrame *f) {
+    if (f->format == AV_PIX_FMT_VIDEOTOOLBOX) {
+        CVPixelBufferRef pb = (CVPixelBufferRef)f->data[3];
+        if (!pb) return NULL;
+        return (CVPixelBufferRef)CFRetain(pb);
+    }
+    // 소프트웨어 프레임 — nv12(420v)로 옮긴다. 향상 처리기가 받는 형식이다.
+    if (!t->enh_sws) {
+        t->enh_sws = sws_getContext(f->width, f->height, (enum AVPixelFormat)f->format,
+                                    f->width, f->height, AV_PIX_FMT_NV12,
+                                    SWS_BICUBIC, NULL, NULL, NULL);
+        if (!t->enh_sws) return NULL;
+    }
+    CVPixelBufferRef pb = NULL;
+    const void *keys[] = { kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferMetalCompatibilityKey };
+    const void *vals[] = { (const void *)CFDictionaryCreate(NULL, NULL, NULL, 0,
+                                                            &kCFTypeDictionaryKeyCallBacks,
+                                                            &kCFTypeDictionaryValueCallBacks),
+                           (const void *)kCFBooleanTrue };
+    CFDictionaryRef attrs = CFDictionaryCreate(NULL, keys, vals, 2,
+                                               &kCFTypeDictionaryKeyCallBacks,
+                                               &kCFTypeDictionaryValueCallBacks);
+    CFRelease(vals[0]);
+    CVReturn cr = CVPixelBufferCreate(NULL, f->width, f->height,
+                                      kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, attrs, &pb);
+    CFRelease(attrs);
+    if (cr != kCVReturnSuccess || !pb) return NULL;
+    if (CVPixelBufferLockBaseAddress(pb, 0) != kCVReturnSuccess) { CFRelease(pb); return NULL; }
+    uint8_t *dst[4] = {
+        (uint8_t *)CVPixelBufferGetBaseAddressOfPlane(pb, 0),
+        (uint8_t *)CVPixelBufferGetBaseAddressOfPlane(pb, 1), NULL, NULL
+    };
+    int dst_stride[4] = {
+        (int)CVPixelBufferGetBytesPerRowOfPlane(pb, 0),
+        (int)CVPixelBufferGetBytesPerRowOfPlane(pb, 1), 0, 0
+    };
+    sws_scale(t->enh_sws, (const uint8_t *const *)f->data, f->linesize, 0, f->height, dst, dst_stride);
+    CVPixelBufferUnlockBaseAddress(pb, 0);
+    return pb;
+}
+
+/// 향상 결과(CVPixelBuffer)를 인코더가 받는 평면 프레임으로 옮겨 인코딩한다.
+static int enhance_encode_buffer(tx *t, CVPixelBufferRef pb, int64_t pts, double sec) {
+    if (!t->enh_out_sws_ready) {
+        // 결과 버퍼의 형식·크기는 매 장 같다고 본다(향상 단계가 고정 풀을 쓴다).
+        t->enh_out_sws = sws_getContext((int)CVPixelBufferGetWidth(pb), (int)CVPixelBufferGetHeight(pb),
+                                        AV_PIX_FMT_NV12, t->enc_w, t->enc_h, t->enc_pix_fmt,
+                                        SWS_BICUBIC, NULL, NULL, NULL);
+        if (!t->enh_out_sws) return fail(t, FFX_ERR_ENCODE, "enhance sws_getContext failed");
+        t->enh_out_sws_ready = 1;
+    }
+    if (CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess)
+        return fail(t, FFX_ERR_ENCODE, "enhance buffer lock failed");
+    const uint8_t *src_data[4] = {
+        (const uint8_t *)CVPixelBufferGetBaseAddressOfPlane(pb, 0),
+        (const uint8_t *)CVPixelBufferGetBaseAddressOfPlane(pb, 1), NULL, NULL
+    };
+    int src_stride[4] = {
+        (int)CVPixelBufferGetBytesPerRowOfPlane(pb, 0),
+        (int)CVPixelBufferGetBytesPerRowOfPlane(pb, 1), 0, 0
+    };
+    AVFrame *c = t->cvt_frame;
+    av_frame_unref(c);
+    c->format = t->enc_pix_fmt;
+    c->width = t->enc_w;
+    c->height = t->enc_h;
+    int rc = av_frame_get_buffer(c, 0);
+    if (rc < 0) {
+        CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+        return fail(t, FFX_ERR_ENCODE, "enhance frame alloc: %s", ffx_averr(rc, t->ebuf, sizeof t->ebuf));
+    }
+    sws_scale(t->enh_out_sws, src_data, src_stride, 0, (int)CVPixelBufferGetHeight(pb), c->data, c->linesize);
+    CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+    c->pts = av_rescale_q(pts, t->vin->time_base, t->enc_tb);
+    c->pict_type = AV_PICTURE_TYPE_NONE;
+    (void)sec;
+    return encode_video_frame(t, c);
+}
+
+/// 향상 단계에서 나온 것을 다 꺼내 인코딩한다.
+static int enhance_drain(tx *t, double sec) {
+    const ffx_enhance_hooks *e = t->opts->enhance;
+    for (;;) {
+        CVPixelBufferRef out = NULL;
+        int64_t out_pts = 0;
+        int got = e->pull(e->ctx, &out, &out_pts);
+        if (got < 0) return fail(t, FFX_ERR_ENCODE, "enhance pull failed (%d)", got);
+        if (got == 0) return 0;
+        if (!out) return fail(t, FFX_ERR_ENCODE, "enhance pull returned no buffer");
+        int rc = enhance_encode_buffer(t, out, out_pts, sec);
+        CFRelease(out);              // 계약: 꺼낸 것은 여기서 놓는다
+        if (rc) return rc;
+        t->frames_enhanced++;
+    }
+}
+
 static int handle_video_frame(tx *t, AVFrame *frame) {
     t->frames_decoded++;
     // pts 정규화
@@ -746,6 +863,20 @@ static int handle_video_frame(tx *t, AVFrame *frame) {
             src = c;
         }
     }
+    // 향상 단계(EnhanceVid) — 훅이 있으면 원본 한 장을 넣고 나오는 만큼 꺼내 인코딩한다.
+    // 보간은 **한 장 늦게**, 노이즈 제거는 두 장 늦게 나오므로 첫 몇 장은 아무것도 안 나온다.
+    if (t->opts->enhance) {
+        const ffx_enhance_hooks *e = t->opts->enhance;
+        CVPixelBufferRef in = enhance_buffer_from_frame(t, frame);
+        if (!in) return fail(t, FFX_ERR_ENCODE, "enhance: 입력 버퍼를 만들지 못했다");
+        int prc = e->push(e->ctx, in, pts, t->vin->time_base.den);
+        CFRelease(in);
+        if (prc < 0) return fail(t, FFX_ERR_ENCODE, "enhance push failed (%d)", prc);
+        int drc = enhance_drain(t, sec);
+        if (drc) return drc;
+        return report_progress(t, sec) ? FFX_ERR_CANCELLED : 0;
+    }
+
     src->pts = av_rescale_q(pts, t->vin->time_base, t->enc_tb);
     src->pict_type = AV_PICTURE_TYPE_NONE;
     int rc = encode_video_frame(t, src);
