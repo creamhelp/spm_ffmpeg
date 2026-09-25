@@ -4,6 +4,11 @@ A Swift Package that wraps a trimmed, LGPL-only build of FFmpeg for iOS and macO
 "Files-app source + FFmpeg fallback engine" of the LeanVid iOS app (project name UrsusShock), and it is also the
 **corresponding source offer** for the FFmpeg binary that ships inside the app (see [License](#license-and-source-offer)).
 
+> **This is the `enhancevid` branch** — the source offer for the **EnhanceVid** app (bundle `com.cream.world.enhancevid`).
+> It is `master` plus enhancement hooks in the bridge (`ffx_enhance_hooks` push/pull/flush in `Sources/`), which hand decoded
+> frames to the app's frame-rate conversion / upscaling / noise filter and take the results back to the encoder.
+> The FFmpeg binary (`Frameworks/FFmpegCore.xcframework`) and its source changes are **identical to `master`**.
+
 ## Layout
 
 ```
@@ -21,6 +26,7 @@ scripts/make-fixtures.sh               # generate test fixtures (needs a host ff
 scripts/patches/movenc-mdta-moov.py    # mov muxer: write mdta metadata in the QuickTime layout (moov/meta) so AVFoundation can read it
 scripts/patches/vtenc-expected-framerate.py     # videotoolbox encoder: set ExpectedFrameRate — prevents 2× bitrate overshoot on 60 fps sources on iOS
 scripts/patches/vt-supplemental-decoder-ios.py  # videotoolbox decoder: register the VP9 supplemental decoder on iOS 26.2+ too (upstream does macOS only)
+scripts/patches/ffmpeg-9.0.1-changes.diff    # all of the above as one unified diff against the upstream tarball, with dates
 ```
 
 ## Design notes
@@ -55,14 +61,16 @@ slice is arm64 only, so set `EXCLUDED_ARCHS[sdk=iphonesimulator*] = x86_64`.
 ## License and source offer
 
 This repository is the **corresponding source offer** for the FFmpeg build embedded in the LeanVid iOS app
-(bundle `com.cream.world.leanvid`, "FFmpegCore.framework").
+(bundle `com.cream.world.leanvid`, "FFmpegCore.framework") and, on this `enhancevid` branch, in the EnhanceVid app
+(bundle `com.cream.world.enhancevid`, same "FFmpegCore.framework").
 
 - **FFmpeg 9.0.1** — GNU Lesser General Public License v2.1 or later (`LICENSES/FFmpeg-COPYING.LGPLv2.1`).
   Upstream source: https://ffmpeg.org/releases/ffmpeg-9.0.1.tar.xz. Built with `--disable-gpl --disable-nonfree`
   (no GPL components). The exact configure flags are in `scripts/build-ffmpeg.sh`; the only source modifications are the
   three idempotent patch scripts in `scripts/patches/` (mov muxer QuickTime-style `mdta` metadata, VideoToolbox encoder
   `ExpectedFrameRate`, VideoToolbox VP9 supplemental decoder registration on iOS 26.2+). Apply them to the upstream
-  tarball with `scripts/build-ffmpeg.sh` to reproduce the shipped binary.
+  tarball with `scripts/build-ffmpeg.sh` to reproduce the shipped binary. The same changes as a plain unified diff, with
+  the date of each change: `scripts/patches/ffmpeg-9.0.1-changes.diff` (`patch -p1` inside the extracted tarball).
 - **dav1d 1.5.4** — BSD 2-Clause (`LICENSES/dav1d-COPYING`), statically linked into the same framework as the AV1
   software decoder. Upstream source: https://downloads.videolan.org/pub/videolan/dav1d/1.5.4/. Built unmodified by
   `scripts/build-dav1d.sh`.
