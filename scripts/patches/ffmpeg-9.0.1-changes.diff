@@ -1,0 +1,117 @@
+FFmpeg 9.0.1 — changes made for spm_ffmpeg (LGPL-2.1 §2 notice)
+================================================================
+
+This file lists every change made to the FFmpeg source that is compiled into
+Frameworks/FFmpegCore.xcframework. Nothing else in the FFmpeg tree was changed.
+
+  Upstream source : https://ffmpeg.org/releases/ffmpeg-9.0.1.tar.xz
+  SHA-256         : cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635
+  Apply           : tar -xJf ffmpeg-9.0.1.tar.xz && cd ffmpeg-9.0.1 && patch -p1 < ffmpeg-9.0.1-changes.diff
+                    (same result as scripts/build-ffmpeg.sh, which runs the three scripts in scripts/patches/)
+
+Changed files and dates of change:
+  libavformat/movenc.c           2026-09-03  mov muxer writes mdta metadata QuickTime-style (moov/meta)
+                                             so AVFoundation can read it  (movenc-mdta-moov.py)
+  libavcodec/videotoolboxenc.c   2026-09-05  VideoToolbox encoder sets ExpectedFrameRate — prevents a 2x
+                                             bitrate overshoot on 60 fps sources on iOS  (vtenc-expected-framerate.py)
+  libavcodec/videotoolbox.c      2026-09-05  VideoToolbox decoder registers the VP9 supplemental decoder on
+                                             iOS 26.2+ too (upstream does it on macOS only)  (vt-supplemental-decoder-ios.py)
+
+Every changed line is marked in the source with a "spm_ffmpeg:" comment.
+Verified 2026-09-25: all 10,397 files of the upstream tarball, with these changes applied, are
+byte-identical to the tree the shipped binary was built from (build/ffmpeg-9.0.1).
+
+diff --color -ruN a/libavcodec/videotoolbox.c b/libavcodec/videotoolbox.c
+--- a/libavcodec/videotoolbox.c
++++ b/libavcodec/videotoolbox.c
+@@ -972,9 +972,13 @@
+     }
+ #endif
+ 
+-#if defined(MAC_OS_VERSION_11_0) && !TARGET_OS_IPHONE && (MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_VERSION_11_0) && AV_HAS_BUILTIN(__builtin_available)
+-    if (__builtin_available(macOS 11.0, *)) {
++/* spm_ffmpeg: supplemental decoder on iOS 26.2+ — the API is public there since SDK 26.2 (VTUtilities.h);
++ * upstream only calls it on macOS, so VP9 hwaccel could never open a session on iOS. */
++#if AV_HAS_BUILTIN(__builtin_available) && (TARGET_OS_OSX || TARGET_OS_IPHONE)
++    if (__builtin_available(macOS 11.0, iOS 26.2, tvOS 26.2, visionOS 26.2, *)) {
+         VTRegisterSupplementalVideoDecoderIfAvailable(videotoolbox->cm_codec_type);
++        av_log(avctx, AV_LOG_VERBOSE, "spm_ffmpeg: requested supplemental VideoToolbox decoder for codec type 0x%08x\n",
++               (unsigned)videotoolbox->cm_codec_type);
+     }
+ #endif
+ 
+diff --color -ruN a/libavcodec/videotoolboxenc.c b/libavcodec/videotoolboxenc.c
+--- a/libavcodec/videotoolboxenc.c
++++ b/libavcodec/videotoolboxenc.c
+@@ -1288,6 +1288,25 @@
+         return AVERROR_EXTERNAL;
+     }
+ 
++    /* spm_ffmpeg: ExpectedFrameRate — without it the iOS HEVC encoder budgets its average bitrate
++     * as if the stream were 30 fps (measured 2x overshoot at 60 fps). Advisory: failure is ignored. */
++    if (avctx->framerate.num > 0 && avctx->framerate.den > 0) {
++        double expected_fps = av_q2d(avctx->framerate);
++        CFNumberRef fps_num = CFNumberCreate(kCFAllocatorDefault, kCFNumberDoubleType, &expected_fps);
++        if (fps_num) {
++            status = VTSessionSetProperty(vtctx->session,
++                                          kVTCompressionPropertyKey_ExpectedFrameRate,
++                                          fps_num);
++            CFRelease(fps_num);
++            if (status) {
++                av_log(avctx, AV_LOG_WARNING, "Error setting ExpectedFrameRate property: %d (ignored)\n", status);
++                status = 0;
++            } else {
++                av_log(avctx, AV_LOG_VERBOSE, "ExpectedFrameRate=%.3f\n", expected_fps);
++            }
++        }
++    }
++
+     if (vtctx->prio_speed >= 0) {
+         status = VTSessionSetProperty(vtctx->session,
+                                       compat_keys.kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
+diff --color -ruN a/libavformat/movenc.c b/libavformat/movenc.c
+--- a/libavformat/movenc.c
++++ b/libavformat/movenc.c
+@@ -4945,6 +4945,19 @@
+     return update_size(pb, pos);
+ }
+ 
++/* spm_ffmpeg: QuickTime-style meta (moov/meta, no version/flags) so AVFoundation reads mdta keys */
++static int mov_write_qt_meta_tag(AVIOContext *pb, MOVMuxContext *mov,
++                                 AVFormatContext *s)
++{
++    int64_t pos = avio_tell(pb);
++    avio_wb32(pb, 0); /* size */
++    ffio_wfourcc(pb, "meta");
++    mov_write_mdta_hdlr_tag(pb, mov, s);
++    mov_write_mdta_keys_tag(pb, mov, s);
++    mov_write_mdta_ilst_tag(pb, mov, s);
++    return update_size(pb, pos);
++}
++
+ /* meta data tags */
+ static int mov_write_meta_tag(AVIOContext *pb, MOVMuxContext *mov,
+                               AVFormatContext *s)
+@@ -5104,7 +5117,8 @@
+         mov_write_raw_metadata_tag(s, pb_buf, "XMP_", "xmp");
+     } else {
+         /* iTunes meta data */
+-        mov_write_meta_tag(pb_buf, mov, s);
++        if (!(mov->flags & FF_MOV_FLAG_USE_MDTA))   /* spm_ffmpeg: mdta keys are written at moov/meta instead */
++            mov_write_meta_tag(pb_buf, mov, s);
+         mov_write_loci_tag(s, pb_buf);
+     }
+ 
+@@ -5444,8 +5458,11 @@
+ 
+     if (mov->mode == MODE_PSP)
+         mov_write_uuidusmt_tag(pb, s);
+-    else if (mov->mode != MODE_AVIF)
++    else if (mov->mode != MODE_AVIF) {
++        if (mov->flags & FF_MOV_FLAG_USE_MDTA)
++            mov_write_qt_meta_tag(pb, mov, s);   /* spm_ffmpeg: QuickTime-style meta at moov level */
+         mov_write_udta_tag(pb, mov, s);
++    }
+     for (i = 0; i < mov->nb_streams; i++)
+         mov_write_pssh_tag(pb, mov->tracks[i].st);
+ 
