@@ -106,6 +106,10 @@ build_platform() {
       --extra-cflags="-arch arm64 -isysroot $sysroot $minflag -fno-common -O3 -I$deps/include" \
       --extra-ldflags="-arch arm64 -isysroot $sysroot $minflag -L$deps/lib" \
       "${COMMON_FLAGS[@]}"
+    # Keep the absolute path of the build machine out of the configuration string (avutil_configuration etc.):
+    # replace the repository root with '.' before compiling, and stop if a home path is still there.
+    sed -i '' "s#$ROOT#.#g" config.h
+    ! grep -q "$HOME" config.h || { echo "[build] config.h still contains a home path"; exit 1; }
     make -j"$JOBS"
     make install
   ) > "$log" 2>&1 || { echo "[build] FAILED $platform — see $log"; tail -40 "$log"; exit 1; }
