@@ -106,6 +106,10 @@ build_platform() {
       --extra-cflags="-arch arm64 -isysroot $sysroot $minflag -fno-common -O3 -I$deps/include" \
       --extra-ldflags="-arch arm64 -isysroot $sysroot $minflag -L$deps/lib" \
       "${COMMON_FLAGS[@]}"
+    # 구성 문자열(avutil_configuration 등)에 빌드한 맥의 절대 경로가 박히지 않게 저장소 루트를 '.' 로 바꾼다 —
+    # 공개 바이너리와 앱 화면에 빌드한 맥의 홈 폴더 경로가 그대로 보였다.
+    sed -i '' "s#$ROOT#.#g" config.h
+    ! grep -q "$HOME" config.h || { echo "[build] config.h 에 홈 경로가 남음"; exit 1; }
     make -j"$JOBS"
     make install
   ) > "$log" 2>&1 || { echo "[build] FAILED $platform — see $log"; tail -40 "$log"; exit 1; }
